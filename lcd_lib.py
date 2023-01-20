@@ -1,7 +1,7 @@
-
 from machine import Pin,SPI,PWM
 import framebuf
 import time
+import os
 
 BL = 13
 DC = 8
@@ -11,7 +11,7 @@ SCK = 10
 CS = 9
 
 
-class LCD_1inch14(framebuf.FrameBuffer):
+class LCD_1inch3(framebuf.FrameBuffer):
     def __init__(self):
         self.width = 240
         self.height = 135
@@ -22,17 +22,18 @@ class LCD_1inch14(framebuf.FrameBuffer):
         self.cs(1)
         self.spi = SPI(1)
         self.spi = SPI(1,1000_000)
-        self.spi = SPI(1,10000_000,polarity=0, phase=0,sck=Pin(SCK),mosi=Pin(MOSI),miso=None)
+        self.spi = SPI(1,100000_000,polarity=0, phase=0,sck=Pin(SCK),mosi=Pin(MOSI),miso=None)
         self.dc = Pin(DC,Pin.OUT)
         self.dc(1)
         self.buffer = bytearray(self.height * self.width * 2)
         super().__init__(self.buffer, self.width, self.height, framebuf.RGB565)
         self.init_display()
-        
+        # B-R-G
         self.red   =   0x07E0
         self.green =   0x001f
         self.blue  =   0xf800
         self.white =   0xffff
+        self.black =   0x0000
         
     def write_cmd(self, cmd):
         self.cs(1)
@@ -150,67 +151,72 @@ class LCD_1inch14(framebuf.FrameBuffer):
         self.cs(0)
         self.spi.write(self.buffer)
         self.cs(1)
-  
-if __name__=='__main__':
-    pwm = PWM(Pin(BL))
-    pwm.freq(1000)
-    pwm.duty_u16(32768)#max 65535
+        
+    def render(self,image_name,offset_x=0,offset_y=0,background=None,show_rendering=True):
+        '''Method to render 16-Bit images on the LCD panel
 
-    LCD = LCD_1inch14()
-    #color BRG
-    LCD.fill(LCD.white)
- 
-    LCD.show()
-    LCD.text("Raspberry Pi Pico",60,40,LCD.red)
-    LCD.text("PicoGo",60,60,LCD.green)
-    LCD.text("Pico-LCD-1.14",60,80,LCD.blue)
-    
-    
-    
-    LCD.hline(10,10,220,LCD.blue)
-    LCD.hline(10,125,220,LCD.blue)
-    LCD.vline(10,10,115,LCD.blue)
-    LCD.vline(230,10,115,LCD.blue)
-    
-    
-    LCD.rect(12,12,20,20,LCD.red)
-    LCD.rect(12,103,20,20,LCD.red)
-    LCD.rect(208,12,20,20,LCD.red)
-    LCD.rect(208,103,20,20,LCD.red)
-    
-    LCD.show()
-    key0 = Pin(15,Pin.IN)
-    key1 = Pin(17,Pin.IN)
-    key2 = Pin(2 ,Pin.IN)
-    key3 = Pin(3 ,Pin.IN)
-    while(1):
-        if(key0.value() == 0):
-            LCD.fill_rect(12,12,20,20,LCD.red)
-        else :
-            LCD.fill_rect(12,12,20,20,LCD.white)
-            LCD.rect(12,12,20,20,LCD.red)
+            Args:
+                image_name: path of the encoded image
+                offset_x: x co-ordinate of starting position
+                offset_y: y co-ordinate of starting position
+                background: color of the background
+                show_rendering: if True, the process of rendering is shown, else a loading screen is shown
+        '''
+        self.fill(background)
+
+        f = open(image_name,'r')
+
+        row_count = 0
+
+        while True:
+            data = f.readline()
+            if not data:
+                break
+            px_ptr = 0
+            # All Even Positions will be Pixel Counts and
+            # odd positions will be Pixel Color Values
+            data = data.split(',')
+            for i in range(len(data)):
+                # Reading Count of Homogenous Pixels
+                if i%2 == 0:
+                    px_count = int(data[i])
+                # Reading the Color of the Homogenous Pixels
+                else:
+                    color = int('0x'+data[i])
+                    if color != background:
+                        self.hline(px_ptr+offset_x,row_count+offset_y,px_count,color)            
+                    px_ptr += px_count
+                    
+            row_count += 1
+            if show_rendering:
+                self.show()
             
-        if(key1.value() == 0):
-            LCD.fill_rect(12,103,20,20,LCD.red)
-        else :
-            LCD.fill_rect(12,103,20,20,LCD.white)
-            LCD.rect(12,103,20,20,LCD.red)
-            
-        if(key2.value() == 0):
-            LCD.fill_rect(208,12,20,20,LCD.red)
-        else :
-            LCD.fill_rect(208,12,20,20,LCD.white)
-            LCD.rect(208,12,20,20,LCD.red)
-            
-        if(key3.value() == 0):
-            LCD.fill_rect(208,103,20,20,LCD.red)
-        else :
-            LCD.fill_rect(208,103,20,20,LCD.white)
-            LCD.rect(208,103,20,20,LCD.red)
-            
-            
-        LCD.show()
-    time.sleep(1)
-    LCD.fill(0xFFFF)
+    def write_text(self,text,x,y,size,color):
+        ''' Method to write Text on OLED/LCD Displays
+            with a variable font size
+
+            Args:
+                text: the string of chars to be displayed
+                x: x co-ordinate of starting position
+                y: y co-ordinate of starting position
+                size: font size of text
+                color: color of text to be displayed
+        '''
+        background = self.pixel(x,y)
+        info = []
+        # Creating reference charaters to read their values
+        self.text(text,x,y,color)
+        for i in range(x,x+(8*len(text))):
+            for j in range(y,y+8):
+                # Fetching amd saving details of pixels, such as
+                # x co-ordinate, y co-ordinate, and color of the pixel
+                px_color = self.pixel(i,j)
+                info.append((i,j,px_color)) if px_color == color else None
+        # Clearing the reference characters from the screen
+        self.text(text,x,y,background)
+        # Writing the custom-sized font characters on screen
+        for px_info in info:
+            self.fill_rect(size*px_info[0] - (size-1)*x , size*px_info[1] - (size-1)*y, size, size, px_info[2]) 
+        
 
 
